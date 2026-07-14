@@ -99,6 +99,37 @@ curl -H 'Authorization: Bearer YOUR_TOKEN' \
 
 The summary returns `meeting_count`, `meeting_seconds`, `mic_seconds`, and `camera_seconds`. Active sessions count toward `meeting_count`, but their unfinished duration is not included in `meeting_seconds` until they close. Activity time is estimated between heartbeats: each interval is attributed to the state reported by the preceding event, capped at the 5-minute timeout.
 
+## Event hooks
+
+The server can run optional hooks after an event is committed and after stale meetings expire. Hooks recompute state across all active meetings. A hook failure is logged by the server but does not change the API response or roll back the recorded event.
+
+Enable the Home Assistant light hook with `ON_AIR_HOOKS=homeassistant_light`. It applies this state to one configured light entity:
+
+- red when any active meeting has its camera active;
+- green when a meeting is active with microphone only and no active camera meeting exists;
+- warm yellow/orange from 18:00 inclusive until 01:00 exclusive in the configured timezone after meetings have ended;
+- off outside that time window when no meeting is active.
+
+Create a Home Assistant long-lived access token from your user profile. Find the light's entity ID in **Settings → Devices & services → Entities** by searching for “Living Room Bathroom Lights,” then use the entity ID (for example, `light.some_slug`), not its display name. The entity ID has no default because it must not be guessed.
+
+Set the following variables in the server process/container environment. Keep the token out of source control and ensure the server can reach the Home Assistant URL.
+
+```dotenv
+ON_AIR_HOOKS=homeassistant_light
+ON_AIR_HOMEASSISTANT_URL=http://home-assistant.example:8123
+ON_AIR_HOMEASSISTANT_TOKEN=replace-with-a-long-lived-access-token
+ON_AIR_HOMEASSISTANT_LIGHT_ENTITY_ID=light.actual_entity_id
+ON_AIR_HOMEASSISTANT_TIMEZONE=America/Sao_Paulo
+ON_AIR_HOMEASSISTANT_CAMERA_COLOR=255,0,0
+ON_AIR_HOMEASSISTANT_MIC_COLOR=0,255,0
+ON_AIR_HOMEASSISTANT_NIGHT_COLOR=255,160,0
+# Optional; omit to let Home Assistant preserve/default brightness.
+ON_AIR_HOMEASSISTANT_BRIGHTNESS=
+ON_AIR_HOMEASSISTANT_TIMEOUT_SECONDS=5
+```
+
+Colors are comma-separated RGB values from 0 to 255. Brightness, when set, is an integer from 1 to 255. The URL should be the Home Assistant origin, without an API path. Multiple future hooks can be listed comma-separated in `ON_AIR_HOOKS`; currently `homeassistant_light` is the only available hook.
+
 ## Development
 
 Run server tests without installing dependencies:
@@ -120,8 +151,19 @@ Server configuration:
 | `ON_AIR_API_TOKEN` | empty | Bearer token; empty disables authentication |
 | `ON_AIR_DATABASE` | `/data/on-air.sqlite3` | SQLite file path |
 | `ON_AIR_TIMEOUT_SECONDS` | `300` | Stale-session timeout |
+| `ON_AIR_PORT_BIND` | `8080:8080` | Docker host/container port binding |
 | `ON_AIR_HOST` | `0.0.0.0` | Listen address |
 | `ON_AIR_PORT` | `8080` | Listen port |
+| `ON_AIR_HOOKS` | empty | Comma-separated enabled hooks |
+| `ON_AIR_HOMEASSISTANT_URL` | empty | Home Assistant origin; required when its hook is enabled |
+| `ON_AIR_HOMEASSISTANT_TOKEN` | empty | Home Assistant long-lived token; required when its hook is enabled |
+| `ON_AIR_HOMEASSISTANT_LIGHT_ENTITY_ID` | empty | Target `light.*` entity ID; required when its hook is enabled |
+| `ON_AIR_HOMEASSISTANT_TIMEZONE` | `America/Sao_Paulo` | Local timezone for the evening window |
+| `ON_AIR_HOMEASSISTANT_CAMERA_COLOR` | `255,0,0` | Camera-active RGB color |
+| `ON_AIR_HOMEASSISTANT_MIC_COLOR` | `0,255,0` | Microphone-only active meeting RGB color |
+| `ON_AIR_HOMEASSISTANT_NIGHT_COLOR` | `255,160,0` | No-meeting evening RGB color |
+| `ON_AIR_HOMEASSISTANT_BRIGHTNESS` | empty | Optional turn-on brightness from 1 to 255 |
+| `ON_AIR_HOMEASSISTANT_TIMEOUT_SECONDS` | `5` | Home Assistant request timeout |
 
 ## License
 
