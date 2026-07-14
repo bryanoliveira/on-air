@@ -7,6 +7,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .hooks import HookRunner, hooks_from_environment
 from .store import Store, parse_timestamp
 
 
@@ -14,9 +15,10 @@ USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._@-]{1,128}$")
 
 
 class Application:
-    def __init__(self, store: Store, api_token: str = ""):
+    def __init__(self, store: Store, api_token: str = "", hooks=()):
         self.store = store
         self.api_token = api_token
+        self.hooks = HookRunner(hooks)
 
     def authorized(self, authorization: str | None) -> bool:
         if not self.api_token:
@@ -35,8 +37,30 @@ class Application:
         if type(payload["mic_active"]) is not bool or type(payload["camera_active"]) is not bool:
             raise ValueError("mic_active and camera_active must be booleans")
         occurred_at = parse_timestamp(payload.get("timestamp"))
-        return self.store.record_event(payload["username"], payload["event_type"],
-                                       payload["mic_active"], payload["camera_active"], occurred_at)
+        result = self.store.record_event(
+            payload["username"], payload["event_type"], payload["mic_active"],
+            payload["camera_active"], occurred_at,
+        )
+        self.hooks.run()
+        return result
+
+    def expire_stale(self, now=None) -> int:
+        count = self.store.expire_stale(now)
+        if count:
+            self.hooks.run()
+        return count
+
+    def states(self) -> list[dict]:
+        self.expire_stale()
+        return self.store.states()
+
+    def meetings(self, username: str | None, limit: int) -> list[dict]:
+        self.expire_stale()
+        return self.store.meetings(username, limit)
+
+    def summary(self, username: str | None) -> dict:
+        self.expire_stale()
+        return self.store.summary(username)
 
 
 def handler_for(application: Application):
@@ -67,16 +91,16 @@ def handler_for(application: Application):
             query = parse_qs(parsed.query)
             username = query.get("username", [None])[0]
             if parsed.path == "/api/v1/state":
-                self.send_json(200, {"users": application.store.states()})
+                self.send_json(200, {"users": application.states()})
             elif parsed.path == "/api/v1/meetings":
                 try:
                     limit = min(max(int(query.get("limit", ["100"])[0]), 1), 1000)
                 except ValueError:
                     self.send_json(400, {"error": "limit must be an integer"})
                     return
-                self.send_json(200, {"meetings": application.store.meetings(username, limit)})
+                self.send_json(200, {"meetings": application.meetings(username, limit)})
             elif parsed.path == "/api/v1/summary":
-                self.send_json(200, application.store.summary(username))
+                self.send_json(200, application.summary(username))
             else:
                 self.send_json(404, {"error": "not found"})
 
@@ -111,13 +135,17 @@ def main():
     host = os.environ.get("ON_AIR_HOST", "0.0.0.0")
     port = int(os.environ.get("ON_AIR_PORT", "8080"))
     store = Store(database_path, timeout)
-    application = Application(store, os.environ.get("ON_AIR_API_TOKEN", ""))
+    application = Application(
+        store,
+        os.environ.get("ON_AIR_API_TOKEN", ""),
+        hooks_from_environment(store),
+    )
     server = ThreadingHTTPServer((host, port), handler_for(application))
 
     stop = threading.Event()
     def cleanup():
         while not stop.wait(30):
-            store.expire_stale()
+            application.expire_stale()
     threading.Thread(target=cleanup, name="meeting-cleanup", daemon=True).start()
 
     def shutdown(_signum, _frame):
