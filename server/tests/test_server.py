@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from datetime import datetime, time, timedelta, timezone
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from on_air_server.app import Application, handler_for
 from on_air_server.hooks import HomeAssistantLightHook, LightAction, decide_light_action
@@ -99,10 +99,59 @@ class ServerTests(unittest.TestCase):
 
         hook()
 
+        self.assertEqual(hook._call_service.call_args_list, [
+            call(
+                "turn_on",
+                {"entity_id": "light.living_room_bathroom_lights"},
+            ),
+            call(
+                "turn_on",
+                {"entity_id": "light.living_room_bathroom_lights",
+                 "rgb_color": [255, 0, 0]},
+            ),
+        ])
+
+    def test_home_assistant_hook_primes_without_brightness_then_sets_color(self):
+        self.event(camera=True)
+        hook = HomeAssistantLightHook(
+            self.store,
+            "http://home-assistant.invalid:8123",
+            "not-a-real-token",
+            "light.living_room_bathroom_lights",
+            brightness=123,
+            now=lambda: datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc),
+        )
+        hook._call_service = Mock()
+
+        hook()
+
+        self.assertEqual(hook._call_service.call_args_list, [
+            call(
+                "turn_on",
+                {"entity_id": "light.living_room_bathroom_lights"},
+            ),
+            call(
+                "turn_on",
+                {"entity_id": "light.living_room_bathroom_lights",
+                 "rgb_color": [255, 0, 0], "brightness": 123},
+            ),
+        ])
+
+    def test_home_assistant_hook_turn_off_is_single_call(self):
+        hook = HomeAssistantLightHook(
+            self.store,
+            "http://home-assistant.invalid:8123",
+            "not-a-real-token",
+            "light.living_room_bathroom_lights",
+            now=lambda: datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc),
+        )
+        hook._call_service = Mock()
+
+        hook()
+
         hook._call_service.assert_called_once_with(
-            "turn_on",
-            {"entity_id": "light.living_room_bathroom_lights",
-             "rgb_color": [255, 0, 0]},
+            "turn_off",
+            {"entity_id": "light.living_room_bathroom_lights"},
         )
 
     def test_expiry_runs_hooks(self):
