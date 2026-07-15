@@ -151,6 +151,8 @@ class HomeAssistantLightHook:
                                      self.night_color)
         service_data = {"entity_id": self.entity_id}
         if action.rgb_color is not None:
+            if action.service == "turn_on":
+                self._call_service("turn_on", {"entity_id": self.entity_id})
             service_data["rgb_color"] = list(action.rgb_color)
             if self.brightness is not None:
                 service_data["brightness"] = self.brightness
